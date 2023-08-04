@@ -26,14 +26,14 @@ Sign
 ....
 
 * if there is no half-signed metadata in cache (RSTUF Settings:
-  ``SIGNING_<ROLENAME>``), task returns
+  ``<ROLE_NAME>_SIGNING``), task returns
 * if included metadata has enough signatures:
 
   - and bootstrap is in pending state, bootstrap task is finalized
   - otherwise, metadata update task is finalized
 
 * otherwise, half-signed metadata in cache is updated (RSTUF Settings:
-  ``SIGNING_<ROLENAME>``)
+  ``<ROLE_NAME>_SIGNING``)
 
 .. note::
 
@@ -90,7 +90,7 @@ Bootstrap
 
 * if the included root has enough signatures, task is finalized right away
 * otherwise, task is put in pending state and half-signed root is cached
-  (RSTUF Setting: ``SIGNING_ROOT``)
+  (RSTUF Setting: ``ROOT_SIGNING``)
 
 .. note::
 
