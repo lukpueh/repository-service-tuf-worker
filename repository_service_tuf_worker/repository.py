@@ -1299,24 +1299,29 @@ class MetadataRepository:
         return asdict(result)
 
     @staticmethod
-    def _validate_signature(metadata: Metadata, signature: Signature) -> bool:
-        """Validate  signature over metadata using appropriate delegator.
+    def _validate_signature(
+        delegator: Metadata,
+        delegate: Metadata,
+        rolename: str,
+        signature: Signature,
+    ) -> bool:
+        """Validate signature over delegate using delegator.
         # NOTE: In "metadata update" signing event, the public key and
         # authorization info is retrieved from "trusted root"
 
         """
         keyid = signature.keyid
-        if signature.keyid not in metadata.signed.roles[Root.type]:
+        if signature.keyid not in delegator.signed.roles[Root.type]:
             logging.debug(f"signature '{keyid}' not authorized")
             return False
 
-        key = metadata.signed.keys.get(signature.keyid)
+        key = delegator.signed.keys.get(signature.keyid)
         if not key:
             logging.info(f"no key for signature '{keyid}'")
             return False
 
         signed_serializer = CanonicalJSONSerializer()
-        signed_bytes = signed_serializer.serialize(metadata.signed)
+        signed_bytes = signed_serializer.serialize(delegate.signed)
         try:
             key.verify_signature(signature, signed_bytes)
 
@@ -1327,7 +1332,9 @@ class MetadataRepository:
         return True
 
     @staticmethod
-    def _validate_threshold(metadata: Metadata) -> bool:
+    def _validate_threshold(
+        delegator: Metadata, delegate: Metadata, rolename: str
+    ) -> bool:
         """Validate signature threshold using appropriate delegator(s)."""
         # NOTE: In "metadata update" signing event, the threshold for:
         # -  root is validated with the passed metadata AND the trusted root;
@@ -1342,7 +1349,7 @@ class MetadataRepository:
             # signatures if verify_delegate succeeds, would be easy: `assert
             # len(signatures) == threshold`. Anything, else would require a
             # custom `verify_delegate` function.
-            metadata.verify_delegate(Root.type, metadata)
+            delegator.verify_delegate(rolename, metadata)
 
         except UnsignedMetadataError as e:
             logging.debug(e)
@@ -1393,30 +1400,41 @@ class MetadataRepository:
         # Assert signing event type (currently bootstrap only)
         # TODO: repository-service-tuf/repository-service-tuf-worker#336
         bootstrap_state = self._settings.get_fresh("BOOTSTRAP")
-        if "signing" not in bootstrap_state:
-            return self._result_as_dict(
-                "Signature Failed",
-                {
-                    "sign": False,
-                    "sign_metadata": False,
-                    "message": "No bootstrap available for signing.",
-                },
-            )
+        is_bootstrap = "signing" in bootstrap_state
+        metadata = Metadata.from_dict(metadata_dict)
 
-        # Assert metadata type is allowed for signing event
-        root = Metadata.from_dict(metadata_dict)
-        if not isinstance(Root, root):
-            return self._result_as_dict(
-                "Signature processed.",
-                {
-                    "sign_metadata": False,
-                    "message": f"Unsupported Role {rolename}.",
-                },
-            )
+        signature_delegator: Metadata
+        threshold_delegators: list[Metadata]
+        if is_bootstrap:
+            if not isinstance(Root, metadata):
+                return "FAIL: wrong metadata type for bootstrap"  # TODO: ResultDetails
+
+            signature_delegator = metadata
+            threshold_delegators = [metadata]
+
+        else:  # metadata update
+            trusted_root = self._storage_backend.get("root")
+
+            if isinstance(Root, metadata):
+                signature_delegator = trusted_root
+                threshold_delegators = [trusted_root, metadata]
+
+            elif isinstance(Targets, metadata):
+                return (
+                    "FAIL: targets not yet implemented"  # TODO: ResultDetails
+                )
+
+            else:
+                return "FAIL: wrong metadata type for metadata update"  # TODO: ResultDetails
+
+            signature_delegator = metadata
+            threshold_delegators = self._
 
         # Assert passed signature is valid for metadata
         signature = Signature.from_dict(signature_dict)
-        if not self._validate_signature(root, signature):
+        if not self._validate_signature(
+            signature_delegator, metadata, rolename, signature
+        ):
             return self._result_as_dict(
                 "Signature Failed",
                 {
@@ -1427,9 +1445,9 @@ class MetadataRepository:
             )
 
         # Check threshold with new signature included
-        root.signatures[signature.keyid] = signature
-        if not self._validate_threshold(root):
-            self.write_repository_settings("ROOT_SIGNING", root.to_dict())
+        metadata.signatures[signature.keyid] = signature
+        if not self._validate_threshold(metadata):
+            self.write_repository_settings("ROOT_SIGNING", metadata.to_dict())
             return self._result_as_dict(
                 "Signature processed",
                 {
@@ -1440,13 +1458,14 @@ class MetadataRepository:
             )
 
         # Finalize bootstrap
-        bootstrap_task_id = bootstrap_state.split("signing-")[1]
-        self._bootstrap_complete(root, bootstrap_task_id)
-        return self._result_as_dict(
-            "Signature processed",
-            {
-                "sign": False,
-                "sign_metadata": True,
-                "message": "Bootstrap finished.",
-            },
-        )
+        if is_bootstrap:
+            bootstrap_task_id = bootstrap_state.split("signing-")[1]
+            self._bootstrap_complete(metadata, bootstrap_task_id)
+            return self._result_as_dict(
+                "Signature processed",
+                {
+                    "sign": False,
+                    "sign_metadata": True,
+                    "message": "Bootstrap finished.",
+                },
+            )
