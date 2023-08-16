@@ -1424,8 +1424,8 @@ class MetadataRepository:
     ) -> Dict[str, Any]:
         """Add signature to metadata for pending signing event.
 
-        Add signature (from payload) to cached root metadata (from settings), if
-        a signing event exists, and the signature is valid.
+        Add signature (from payload) to cached root metadata (from settings),
+        if a signing event exists, and the signature is valid.
 
         Signing event types are 'bootstrap' or 'metadata update'.
 
