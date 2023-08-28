@@ -1211,10 +1211,10 @@ class MetadataRepository:
         self, new_root: Metadata[Root]
     ) -> Dict[str, Any]:
         """Update Root metadata."""
-        current_root: Metadata[Root] = self._storage_backend.get(Root.type)
+        trusted_root: Metadata[Root] = self._storage_backend.get(Root.type)
 
         try:
-            self._trusted_root_update(current_root, new_root)
+            self._trusted_root_update(trusted_root, new_root)
         except (
             ValueError,
             UnsignedMetadataError,
@@ -1231,7 +1231,7 @@ class MetadataRepository:
                 },
             )
 
-        self._root_metadata_update_finalize(current_root, new_root)
+        self._root_metadata_update_finalize(trusted_root, new_root)
         return self._task_result(
             TaskName.METADATA_UPDATE,
             True,
