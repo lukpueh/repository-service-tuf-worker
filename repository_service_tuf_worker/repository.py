@@ -1244,10 +1244,20 @@ class MetadataRepository:
                 },
             )
 
+        self._root_metadata_update_finalize(current_root, new_root)
+        return self._task_result(
+            TaskName.METADATA_UPDATE,
+            True,
+            {"message": "Metadata Update Processed", "role": Root.type},
+        )
+
+    def _root_metadata_update_finalize(
+        self, trusted_root: Metadata[Root], new_root: Metadata[Root]
+    ) -> None:
         # We always persist the new root metadata, but we cannot persist
         # without verifying if the online key is rotated to avoid a mismatch
         # with the rest of the roles using the online key.
-        current_online_keyid = current_root.signed.roles[Timestamp.type].keyids
+        current_online_keyid = trusted_root.signed.roles[Timestamp.type].keyids
         new_online_keyid = new_root.signed.roles[Timestamp.type].keyids
         if current_online_keyid == new_online_keyid:
             # online key is not changed, persist the new root
@@ -1282,12 +1292,6 @@ class MetadataRepository:
                         "RSTUF: Task exceed `LOCK_TIMEOUT` "
                         f"({self._timeout} seconds)"
                     )
-
-        return self._task_result(
-            TaskName.METADATA_UPDATE,
-            True,
-            {"message": "Metadata Update Processed", "role": Root.type},
-        )
 
     def metadata_update(
         self,
