@@ -7,7 +7,7 @@ import importlib
 import logging
 import time
 import warnings
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from math import log
 from typing import Any, Dict, List, Literal, Optional
@@ -21,7 +21,7 @@ from securesystemslib.exceptions import (  # type: ignore
     StorageError,
     UnverifiedSignatureError,
 )
-from securesystemslib.signer import Signature, SSlibKey
+from securesystemslib.signer import Key, Signature, SSlibKey
 from tuf.api.exceptions import (
     BadVersionNumberError,
     RepositoryError,
@@ -1519,3 +1519,50 @@ class MetadataRepository:
             # Update successful, root persisted -> finalize event...
             self.write_repository_settings("ROOT_SIGNING", None)
             return _result(True, update="Metadata update finished")
+
+
+@dataclass
+class _SigningStatus:
+    # True if threshold of valid signatures is met
+    verified: bool = False
+    # Set of authorized keyids, which successfully verified a signature
+    verifier_keys: set[str] = field(default_factory=set)
+    # Set of authorized keyids, which did not verify a signature
+    # Reasons: no public key, no signature, or no valid signature for keyid
+    no_verifier_keys: set[str] = field(default_factory=set)
+
+
+def _signing_status(
+    delegated_role: str,
+    delegated_metadata: Metadata,
+    delegator: Optional[Metadata] = None,
+) -> _SigningStatus:
+    if not delegator:
+        delegator = delegated_metadata
+
+    signed_serializer = CanonicalJSONSerializer()
+
+    data = signed_serializer.serialize(delegated_metadata.signed)
+    role = delegator.signed.get_delegated_role(delegated_role)
+
+    status = _SigningStatus()
+    for keyid in role.keyids:
+        try:
+            key = delegator.signed.get_key(keyid)
+        except ValueError:
+            logging.info("No key for keyid %s", keyid)
+            status.no_verifier_keys.add(keyid)
+
+        if keyid not in delegated_metadata.signatures:
+            logging.info("No signature for keyid %s", keyid)
+            status.no_verifier_keys.add(keyid)
+
+        sig = delegated_metadata.signatures[keyid]
+        try:
+            key.verify_signature(sig, data)
+            status.verifier_keys.add(keyid)
+        except UnverifiedSignatureError:
+            logging.info("Key %s failed to verify %s", keyid, delegated_role)
+
+    if len(status.verifier_keys) >= role.threshold:
+        status.verified = True
