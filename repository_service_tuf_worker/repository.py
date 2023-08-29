@@ -1515,3 +1515,5 @@ class MetadataRepository:
 
         if len(status.verifier_keys) >= role.threshold:
             status.verified = True
+
+        return status
