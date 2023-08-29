@@ -22,7 +22,6 @@ from securesystemslib.exceptions import (  # type: ignore
     UnverifiedSignatureError,
 )
 from securesystemslib.signer import Signature, SSlibKey
-from tuf.api.exceptions import UnsignedMetadataError
 from tuf.api.metadata import (  # noqa
     SPECIFICATION_VERSION,
     Delegations,
