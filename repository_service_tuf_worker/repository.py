@@ -697,7 +697,8 @@ class MetadataRepository:
             )
 
         root: Metadata[Root] = Metadata.from_dict(root_metadata[Root.type])
-        if len(root.signatures) == 0:
+        status = self._signing_status("root", root)
+        if not status.verifier_keys:
             self.write_repository_settings("BOOTSTRAP", None)
             return self._task_result(
                 TaskName.BOOTSTRAP,
@@ -708,24 +709,23 @@ class MetadataRepository:
                 },
             )
 
-        for signature in root.signatures.values():
-            if self._validate_signature(root, signature) is False:
-                self.write_repository_settings("BOOTSTRAP", None)
-                return self._task_result(
-                    TaskName.BOOTSTRAP,
-                    False,
-                    {
-                        "message": "Bootstrap Failed",
-                        "error": "Bootstrap has invalid signature(s)",
-                    },
-                )
+        invalid_signatures = root.signatures.keys() - status.verfier_keys
+        if invalid_signatures:
+            self.write_repository_settings("BOOTSTRAP", None)
+            return self._task_result(
+                TaskName.BOOTSTRAP,
+                False,
+                {
+                    "message": "Bootstrap Failed",
+                    "error": "Bootstrap has invalid signature(s)",
+                },
+            )
 
         # save settings
         self.save_settings(root, tuf_settings)
         task_id: str = payload["task_id"]
 
-        signed = self._validate_threshold(root)
-        if signed:
+        if status.verified:
             self._bootstrap_finalize(root, task_id)
             message = f"Bootstrap finished {task_id}"
             logging.info(message)
