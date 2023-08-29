@@ -1380,60 +1380,6 @@ class MetadataRepository:
 
         return self.metadata_update(payload, update_state)
 
-    @staticmethod
-    def _validate_signature(
-        metadata: Metadata,
-        signature: Signature,
-        delegator: Optional[Metadata] = None,
-    ) -> bool:
-        """
-        Validate signature over metadata using appropriate delegator.
-        If no delegator is passed, the metadata itself is used as delegator.
-        """
-        if delegator is None:
-            delegator = metadata
-
-        keyid = signature.keyid
-        if keyid not in delegator.signed.roles[Root.type].keyids:
-            logging.info(f"signature '{keyid}' not authorized")
-            return False
-
-        key = delegator.signed.keys.get(signature.keyid)
-        if not key:
-            logging.info(f"no key for signature '{keyid}'")
-            return False
-
-        signed_serializer = CanonicalJSONSerializer()
-        signed_bytes = signed_serializer.serialize(metadata.signed)
-        try:
-            key.verify_signature(signature, signed_bytes)
-
-        except UnverifiedSignatureError:
-            logging.info(f"signature '{keyid}' invalid")
-            return False
-
-        return True
-
-    @staticmethod
-    def _validate_threshold(
-        metadata: Metadata, delegator: Optional[Metadata] = None
-    ) -> bool:
-        """
-        Validate signature threshold using appropriate delegator(s).
-        If no delegator is passed, the metadata itself is used as delegator.
-        """
-        if delegator is None:
-            delegator = metadata
-
-        try:
-            delegator.verify_delegate(Root.type, metadata)
-
-        except UnsignedMetadataError as e:
-            logging.info(e)
-            return False
-
-        return True
-
     def sign_metadata(
         self,
         payload: Dict[str, Any],
