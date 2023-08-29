@@ -1259,14 +1259,12 @@ class MetadataRepository:
                 TaskName.METADATA_UPDATE,
                 True,
                 {
-                    {
-                        "message": "Metadata Update Processed",
-                        "role": Root.type,
-                        "update": (
-                            f"Root v{new_root.signed.version} is "
-                            "pending signatures"
-                        ),
-                    },
+                    "message": "Metadata Update Processed",
+                    "role": Root.type,
+                    "update": (
+                        f"Root v{new_root.signed.version} is "
+                        "pending signatures"
+                    ),
                 },
             )
 
