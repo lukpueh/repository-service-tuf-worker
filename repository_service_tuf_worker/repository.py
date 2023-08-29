@@ -1474,16 +1474,8 @@ class MetadataRepository:
                 msg = f"Root v{root.signed.version} is pending signatures"
                 return _result(True, update=msg)
 
-            # TODO: Refactor `_root_metadata_update` to de-duplicate validation
-            # and messaging. At this point, we know that root is valid and
-            # there can be only one message. (remove assert after refactor!)
-            result = self._root_metadata_update(root)
-            assert result == {  # nosec
-                "message": "Metadata Update Processed",
-                "role": "root",
-            }
-
-            # Update successful, root persisted -> finalize event...
+            # Threshold reached -> finalize event
+            self._root_metadata_update_finalize(trusted_root, root)
             self.write_repository_settings("ROOT_SIGNING", None)
             return _result(True, update="Metadata update finished")
 
