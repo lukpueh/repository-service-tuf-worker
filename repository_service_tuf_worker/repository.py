@@ -1489,16 +1489,20 @@ class MetadataRepository:
             msg = f"Expected 'root', got '{root.signed.type}'"
             return _result(False, error=msg)
 
+        # Add new signature to cached metadata
+        # TODO: Deepcopy? Must not persist signature in cache if invalid!
+        root.signatures[signature.keyid] = signature
+        status_self = self._signing_status("root", root)
+
         # If it isn't a "bootstrap" signing event, it must be "update metadata"
         bootstrap_state = self._settings.get_fresh("BOOTSTRAP")
         if "signing" in bootstrap_state:
             # Signature and threshold of initial root can only self-validate,
             # there is no "trusted root" at bootstrap time yet.
-            if not self._validate_signature(root, signature):
+            if signature.keyid not in status_self.verifier_keys:
                 return _result(False, error="Invalid signature")
 
-            root.signatures[signature.keyid] = signature
-            if not self._validate_threshold(root):
+            if not status_self.verified:
                 self.write_repository_settings("ROOT_SIGNING", root.to_dict())
                 msg = f"Root v{root.signed.version} is pending signatures"
                 return _result(True, bootstrap=msg)
@@ -1514,18 +1518,14 @@ class MetadataRepository:
             # - threshold must validate with the threshold of keys as defined
             #   in the trusted root AND as defined in the new root
             trusted_root = self._storage_backend.get("root")
-            trusted_signature = self._validate_signature(
-                root, signature, trusted_root
-            )
-            new_signature = self._validate_signature(root, signature)
+            status_trusted = self._signing_status("root", root, trusted_root)
 
-            if not (trusted_signature or new_signature):
+            if signature.keyid not in (
+                status_self.verifier_keys | status_trusted.verifier_keys
+            ):
                 return _result(False, error="Invalid signature")
 
-            root.signatures[signature.keyid] = signature
-            trusted_threshold = self._validate_threshold(root, trusted_root)
-            new_threshold = self._validate_threshold(root)
-            if not (trusted_threshold and new_threshold):
+            if not (status_self.verified and status_trusted.verified):
                 self.write_repository_settings("ROOT_SIGNING", root.to_dict())
                 msg = f"Root v{root.signed.version} is pending signatures"
                 return _result(True, update=msg)
