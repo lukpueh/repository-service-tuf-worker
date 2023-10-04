@@ -21,11 +21,7 @@ from securesystemslib.exceptions import (  # type: ignore
     UnverifiedSignatureError,
 )
 from securesystemslib.signer import Signature, SSlibKey
-from tuf.api.exceptions import (
-    BadVersionNumberError,
-    RepositoryError,
-    UnsignedMetadataError,
-)
+from tuf.api.exceptions import UnsignedMetadataError
 from tuf.api.metadata import (  # noqa
     SPECIFICATION_VERSION,
     Delegations,
@@ -1098,73 +1094,69 @@ class MetadataRepository:
 
         return True
 
-    def _trusted_root_update(
-        self, current_root: Metadata[Root], new_root: Metadata[Root]
-    ):
-        """Verify if the new metadata is a trusted Root metadata"""
-
-        # Verify the Type
-        if new_root.signed.type != Root.type:
-            raise RepositoryError(
-                f"Expected 'root', got '{new_root.signed.type}'"
-            )
-
-        # Verify that new root is signed by trusted root
-        current_root.verify_delegate(Root.type, new_root)
-
-        # Verify that new root is signed by itself
-        new_root.verify_delegate(Root.type, new_root)
-
-        # Verify the new root version
-        if new_root.signed.version != current_root.signed.version + 1:
-            raise BadVersionNumberError(
-                f"Expected root version {current_root.signed.version + 1}"
-                f" instead got version {new_root.signed.version}"
-            )
-
     def _root_metadata_update(
-        self,
-        new_root: Metadata[Root],
-        update_state: Optional[
-            Task.update_state
-        ] = None,  # It is required (see: app.py)
+        self, new_root: Metadata[Root]
     ) -> Dict[str, Any]:
-        """
-        Update Root metadata.
-        It checks if the new root metadata is trusted and runs a specific
-        process for updating the Root Metadata.
+        """Update Root metadata."""
+        trusted_root: Metadata[Root] = self._storage_backend.get(Root.type)
 
-        Args:
-            new_root: contains new metadata
-                example: {"metadata": {"root": Any}}
-            update_state: not used, but required argument by `app.py`
-        """
-        current_root: Metadata[Root] = self._storage_backend.get(Root.type)
-
-        try:
-            self._trusted_root_update(current_root, new_root)
-        except (
-            ValueError,
-            UnsignedMetadataError,
-            TypeError,
-            BadVersionNumberError,
-            RepositoryError,
-        ) as err:
+        # TODO: Type and version increment sanity checks are the same for
+        # every metadata type, should we move them to `metadata_update`?
+        if new_root.signed.type != Root.type:
             return self._task_result(
                 TaskName.METADATA_UPDATE,
                 False,
                 {
                     "message": "Metadata Update Failed",
-                    "error": f"Failed to verify the trust: {str(err)}",
+                    "error": (
+                        "Failed to verify the trust: Expected 'root', "
+                        f"got '{new_root.signed.type}'"
+                    ),
+                },
+            )
+        expected_version = trusted_root.signed.version + 1
+        if new_root.signed.version != expected_version:
+            return self._task_result(
+                TaskName.METADATA_UPDATE,
+                False,
+                {
+                    "message": "Metadata Update Failed",
+                    "error": (
+                        "Failed to verify the trust: Expected root "
+                        f"version {expected_version} instead got "
+                        f"version {new_root.signed.version}"
+                    ),
                 },
             )
 
-        self._root_metadata_update_finalize(current_root, new_root)
-        return self._task_result(
-            TaskName.METADATA_UPDATE,
-            True,
-            {"message": "Metadata Update Processed", "role": Root.type},
-        )
+        # TODO: Add sanity check - new root must have least 1 and only valid
+        # signatures (use `get_verification_status` from #367)
+
+        # Signature threshold check
+        trusted_threshold = self._validate_threshold(new_root, trusted_root)
+        new_threshold = self._validate_threshold(new_root)
+
+        if trusted_threshold and new_threshold:
+            self._root_metadata_update_finalize(trusted_root, new_root)
+            return self._task_result(
+                TaskName.METADATA_UPDATE,
+                True,
+                {"message": "Metadata Update Processed", "role": Root.type},
+            )
+        else:
+            self.write_repository_settings("ROOT_SIGNING", new_root.to_dict())
+            return self._task_result(
+                TaskName.METADATA_UPDATE,
+                True,
+                {
+                    "message": "Metadata Update Processed",
+                    "role": Root.type,
+                    "update": (
+                        f"Root v{new_root.signed.version} is "
+                        "pending signatures"
+                    ),
+                },
+            )
 
     def _root_metadata_update_finalize(
         self, current_root: Metadata[Root], new_root: Metadata[Root]
