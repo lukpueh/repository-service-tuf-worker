@@ -2453,115 +2453,18 @@ class TestMetadataRepository:
             pretend.call(repository.LOCK_TARGETS, timeout=60)
         ]
 
-    def test__trusted_root_update(self, test_repo):
-        fake_new_root_md = pretend.stub(
-            signed=pretend.stub(
-                roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
-                version=2,
-                type=repository.Root.type,
-            ),
-            verify_delegate=pretend.call_recorder(lambda *a: None),
-        )
-        fake_old_root_md = pretend.stub(
-            signed=pretend.stub(
-                roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
-                version=1,
-            ),
-            verify_delegate=pretend.call_recorder(lambda *a: None),
-        )
-
-        result = test_repo._trusted_root_update(
-            fake_old_root_md, fake_new_root_md
-        )
-        assert result is None
-        assert fake_new_root_md.verify_delegate.calls == [
-            pretend.call(repository.Root.type, fake_new_root_md)
-        ]
-        assert fake_old_root_md.verify_delegate.calls == [
-            pretend.call(repository.Root.type, fake_new_root_md)
-        ]
-
-    def test__trusted_root_update_fail_current_verify_delegate(
-        self, test_repo
-    ):
-        fake_new_root_md = pretend.stub(
-            signed=pretend.stub(
-                roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
-                version=2,
-                type=repository.Root.type,
-            ),
-            verify_delegate=pretend.raiser(
-                TypeError("Call is valid only on delegator metadata")
-            ),
-        )
-        fake_old_root_md = pretend.stub(
-            signed=pretend.stub(
-                roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
-                version=1,
-            ),
-            verify_delegate=pretend.call_recorder(lambda *a: None),
-        )
-
-        with pytest.raises(TypeError) as err:
-            test_repo._trusted_root_update(fake_old_root_md, fake_new_root_md)
-        assert "Call is valid only on delegator metadata" in str(err)
-
-    def test__trusted_root_update_bad_version(self, test_repo):
-        fake_new_root_md = pretend.stub(
-            signed=pretend.stub(
-                roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
-                version=4,
-                type=repository.Root.type,
-            ),
-            verify_delegate=pretend.call_recorder(lambda *a: None),
-        )
-        fake_old_root_md = pretend.stub(
-            signed=pretend.stub(
-                roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
-                version=1,
-            ),
-            verify_delegate=pretend.call_recorder(lambda *a: None),
-        )
-
-        with pytest.raises(repository.BadVersionNumberError) as err:
-            test_repo._trusted_root_update(fake_old_root_md, fake_new_root_md)
-        assert "Expected root version 2 instead got version 4" in str(err)
-        assert fake_new_root_md.verify_delegate.calls == [
-            pretend.call(repository.Root.type, fake_new_root_md)
-        ]
-        assert fake_old_root_md.verify_delegate.calls == [
-            pretend.call(repository.Root.type, fake_new_root_md)
-        ]
-
-    def test__trusted_root_update_bad_type(self, test_repo):
-        fake_new_root_md = pretend.stub(
-            signed=pretend.stub(
-                roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
-                version=2,
-                type=repository.Snapshot.type,
-            ),
-        )
-        fake_old_root_md = pretend.stub(
-            signed=pretend.stub(
-                roles={"root": pretend.stub(keyids={"k1": "v1"})},
-                version=1,
-            ),
-        )
-
-        with pytest.raises(repository.RepositoryError) as err:
-            test_repo._trusted_root_update(fake_old_root_md, fake_new_root_md)
-        assert "Expected 'root', got 'snapshot'" in str(err)
-
-    def test__root_metadata_update(self, test_repo, mocked_datetime):
+    def test__root_metadata_update_final(self, test_repo, mocked_datetime):
         fake_datetime = mocked_datetime
         fake_new_root_md = pretend.stub(
             signed=pretend.stub(
+                type=repository.Root.type,
                 roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
                 version=2,
             )
         )
         fake_old_root_md = pretend.stub(
             signed=pretend.stub(
+                type=repository.Root.type,
                 roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
                 version=1,
             )
@@ -2569,7 +2472,13 @@ class TestMetadataRepository:
         test_repo._storage_backend.get = pretend.call_recorder(
             lambda *a: fake_old_root_md
         )
-        test_repo._trusted_root_update = pretend.call_recorder(lambda *a: None)
+
+        # Use next/iter to mock return value of two subsequent calls
+        is_valid = iter((True, True))
+        test_repo._validate_threshold = pretend.call_recorder(
+            lambda *a: next(is_valid)
+        )
+
         test_repo._persist = pretend.call_recorder(lambda *a: None)
 
         result = test_repo._root_metadata_update(fake_new_root_md)
@@ -2586,25 +2495,22 @@ class TestMetadataRepository:
         assert test_repo._storage_backend.get.calls == [
             pretend.call(repository.Root.type)
         ]
-        assert test_repo._trusted_root_update.calls == [
-            pretend.call(fake_old_root_md, fake_new_root_md)
-        ]
         assert test_repo._persist.calls == [
             pretend.call(fake_new_root_md, repository.Root.type)
         ]
 
-    def test__root_metadata_update_not_trusted(
-        self, test_repo, mocked_datetime
-    ):
+    def test__root_metadata_update_partial(self, test_repo, mocked_datetime):
         fake_datetime = mocked_datetime
         fake_new_root_md = pretend.stub(
             signed=pretend.stub(
+                type=repository.Root.type,
                 roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
                 version=2,
             )
         )
         fake_old_root_md = pretend.stub(
             signed=pretend.stub(
+                type=repository.Root.type,
                 roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
                 version=1,
             )
@@ -2612,8 +2518,46 @@ class TestMetadataRepository:
         test_repo._storage_backend.get = pretend.call_recorder(
             lambda *a: fake_old_root_md
         )
-        test_repo._trusted_root_update = pretend.raiser(
-            repository.BadVersionNumberError("Version v3 instead v2")
+
+        # Use next/iter to mock return value of two subsequent calls
+        # NOTE: Test behaves the same for any boolean tuple that evaluates to
+        # False when and'ed, i.e. (False, False), (False, True), (True, False)
+        is_valid = iter((False, False))
+        test_repo._validate_threshold = pretend.call_recorder(
+            lambda *a: next(is_valid)
+        )
+
+        fake_new_root_md.to_dict = pretend.call_recorder(lambda: "fake")
+        test_repo.write_repository_settings = pretend.call_recorder(
+            lambda *a: "fake"
+        )
+
+        result = test_repo._root_metadata_update(fake_new_root_md)
+
+        assert result == {
+            "task": "metadata_update",
+            "status": True,
+            "last_update": fake_datetime.now(),
+            "details": {
+                "message": "Metadata Update Processed",
+                "role": "root",
+                "update": "Root v2 is pending signatures",
+            },
+        }
+        assert test_repo._storage_backend.get.calls == [
+            pretend.call(repository.Root.type)
+        ]
+
+    def test__root_metadata_update_bad_type(self, test_repo, mocked_datetime):
+        fake_datetime = mocked_datetime
+        fake_new_root_md = pretend.stub(
+            signed=pretend.stub(
+                type=repository.Timestamp.type,
+            )
+        )
+        fake_old_root_md = pretend.stub()
+        test_repo._storage_backend.get = pretend.call_recorder(
+            lambda *a: fake_old_root_md
         )
 
         result = test_repo._root_metadata_update(fake_new_root_md)
@@ -2624,7 +2568,50 @@ class TestMetadataRepository:
             "last_update": fake_datetime.now(),
             "details": {
                 "message": "Metadata Update Failed",
-                "error": "Failed to verify the trust: Version v3 instead v2",
+                "error": (
+                    "Failed to verify the trust: Expected 'root', "
+                    "got 'timestamp'"
+                ),
+            },
+        }
+        assert test_repo._storage_backend.get.calls == [
+            pretend.call(repository.Root.type)
+        ]
+
+    def test__root_metadata_update_bad_version(
+        self, test_repo, mocked_datetime
+    ):
+        fake_datetime = mocked_datetime
+        fake_new_root_md = pretend.stub(
+            signed=pretend.stub(
+                type=repository.Root.type,
+                roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
+                version=2,
+            )
+        )
+        fake_old_root_md = pretend.stub(
+            signed=pretend.stub(
+                type=repository.Root.type,
+                roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
+                version=2,
+            )
+        )
+        test_repo._storage_backend.get = pretend.call_recorder(
+            lambda *a: fake_old_root_md
+        )
+
+        result = test_repo._root_metadata_update(fake_new_root_md)
+
+        assert result == {
+            "task": "metadata_update",
+            "status": False,
+            "last_update": fake_datetime.now(),
+            "details": {
+                "message": "Metadata Update Failed",
+                "error": (
+                    "Failed to verify the trust: Expected root "
+                    "version 3 instead got version 2"
+                ),
             },
         }
         assert test_repo._storage_backend.get.calls == [
@@ -2637,12 +2624,14 @@ class TestMetadataRepository:
         fake_datetime = mocked_datetime
         fake_new_root_md = pretend.stub(
             signed=pretend.stub(
+                type=repository.Root.type,
                 roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
                 version=2,
             )
         )
         fake_old_root_md = pretend.stub(
             signed=pretend.stub(
+                type=repository.Root.type,
                 roles={"timestamp": pretend.stub(keyids={"k2": "v2"})},
                 version=1,
             )
@@ -2650,7 +2639,12 @@ class TestMetadataRepository:
         test_repo._storage_backend.get = pretend.call_recorder(
             lambda *a: fake_old_root_md
         )
-        test_repo._trusted_root_update = pretend.call_recorder(lambda *a: None)
+
+        # Use next/iter to mock return value of two subsequent calls
+        is_valid = iter((True, True))
+        test_repo._validate_threshold = pretend.call_recorder(
+            lambda *a: next(is_valid)
+        )
 
         @contextmanager
         def mocked_lock(lock, timeout):
@@ -2678,9 +2672,6 @@ class TestMetadataRepository:
         assert test_repo._storage_backend.get.calls == [
             pretend.call(repository.Root.type)
         ]
-        assert test_repo._trusted_root_update.calls == [
-            pretend.call(fake_old_root_md, fake_new_root_md)
-        ]
         assert test_repo._redis.lock.calls == [
             pretend.call(repository.LOCK_TARGETS, timeout=60.0)
         ]
@@ -2696,12 +2687,14 @@ class TestMetadataRepository:
     ):
         fake_new_root_md = pretend.stub(
             signed=pretend.stub(
+                type=repository.Root.type,
                 roles={"timestamp": pretend.stub(keyids={"k1": "v1"})},
                 version=2,
             )
         )
         fake_old_root_md = pretend.stub(
             signed=pretend.stub(
+                type=repository.Root.type,
                 roles={"timestamp": pretend.stub(keyids={"k2": "v2"})},
                 version=1,
             )
@@ -2717,7 +2710,12 @@ class TestMetadataRepository:
         test_repo._storage_backend.get = pretend.call_recorder(
             lambda *a: fake_old_root_md
         )
-        test_repo._trusted_root_update = pretend.call_recorder(lambda *a: None)
+
+        # Use next/iter to mock return value of two subsequent calls
+        is_valid = iter((True, True))
+        test_repo._validate_threshold = pretend.call_recorder(
+            lambda *a: next(is_valid)
+        )
 
         @contextmanager
         def mocked_lock(lock, timeout):
@@ -2732,9 +2730,6 @@ class TestMetadataRepository:
         assert "RSTUF: Task exceed `LOCK_TIMEOUT` (60 seconds)" in str(e)
         assert test_repo._storage_backend.get.calls == [
             pretend.call(repository.Root.type)
-        ]
-        assert test_repo._trusted_root_update.calls == [
-            pretend.call(fake_old_root_md, fake_new_root_md)
         ]
 
     def test_metadata_update(self, monkeypatch, test_repo):
