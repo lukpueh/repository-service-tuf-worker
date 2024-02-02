@@ -17,7 +17,6 @@ from celery.app.task import Task
 from celery.exceptions import ChordError
 from celery.result import AsyncResult, states
 from dynaconf.loaders import redis_loader
-from securesystemslib.exceptions import UnverifiedSignatureError
 from securesystemslib.signer import Signature
 from tuf.api.exceptions import (
     BadVersionNumberError,
@@ -36,7 +35,7 @@ from tuf.api.metadata import (  # noqa
     Targets,
     Timestamp,
 )
-from tuf.api.serialization.json import CanonicalJSONSerializer, JSONSerializer
+from tuf.api.serialization.json import JSONSerializer
 
 from repository_service_tuf_worker import (  # noqa
     Dynaconf,
@@ -624,7 +623,10 @@ class MetadataRepository:
             )
 
         root: Metadata[Root] = Metadata.from_dict(root_metadata[Root.type])
-        if len(root.signatures) == 0:
+        result = root.signed.get_root_verification_result(
+            root.signed, root.signed_bytes, root.signatures
+        )
+        if not result.signed:
             self.write_repository_settings("BOOTSTRAP", None)
             return self._task_result(
                 task=TaskName.BOOTSTRAP,
@@ -633,22 +635,19 @@ class MetadataRepository:
                 details=None,
             )
 
-        for signature in root.signatures.values():
-            if self._validate_signature(root, signature) is False:
-                self.write_repository_settings("BOOTSTRAP", None)
-                return self._task_result(
-                    task=TaskName.BOOTSTRAP,
-                    message="Bootstrap Failed",
-                    error="Bootstrap has invalid signature(s)",
-                    details=None,
-                )
+        if root.signatures.keys() - result.signed.keys():
+            return self._task_result(
+                task=TaskName.BOOTSTRAP,
+                message="Bootstrap Failed",
+                error="Bootstrap has invalid signature(s)",
+                details=None,
+            )
 
         # save settings
         self.save_settings(root, tuf_settings)
         task_id: str = payload["task_id"]
 
-        signed = self._validate_threshold(root)
-        if signed:
+        if result.verified:
             self._bootstrap_finalize(root, task_id)
             message = f"Bootstrap finished {task_id}"
             logging.info(message)
@@ -1275,60 +1274,6 @@ class MetadataRepository:
 
         return self.metadata_update(payload, update_state)
 
-    @staticmethod
-    def _validate_signature(
-        metadata: Metadata,
-        signature: Signature,
-        delegator: Optional[Metadata] = None,
-    ) -> bool:
-        """
-        Validate signature over metadata using appropriate delegator.
-        If no delegator is passed, the metadata itself is used as delegator.
-        """
-        if delegator is None:
-            delegator = metadata
-
-        keyid = signature.keyid
-        if keyid not in delegator.signed.roles[Root.type].keyids:
-            logging.info(f"signature '{keyid}' not authorized")
-            return False
-
-        key = delegator.signed.keys.get(signature.keyid)
-        if not key:
-            logging.info(f"no key for signature '{keyid}'")
-            return False
-
-        signed_serializer = CanonicalJSONSerializer()
-        signed_bytes = signed_serializer.serialize(metadata.signed)
-        try:
-            key.verify_signature(signature, signed_bytes)
-
-        except UnverifiedSignatureError:
-            logging.info(f"signature '{keyid}' invalid")
-            return False
-
-        return True
-
-    @staticmethod
-    def _validate_threshold(
-        metadata: Metadata, delegator: Optional[Metadata] = None
-    ) -> bool:
-        """
-        Validate signature threshold using appropriate delegator(s).
-        If no delegator is passed, the metadata itself is used as delegator.
-        """
-        if delegator is None:
-            delegator = metadata
-
-        try:
-            delegator.verify_delegate(Root.type, metadata)
-
-        except UnsignedMetadataError as e:
-            logging.info(e)
-            return False
-
-        return True
-
     def sign_metadata(
         self,
         payload: Dict[str, Any],
@@ -1388,16 +1333,22 @@ class MetadataRepository:
             msg = f"Expected 'root', got '{root.signed.type}'"
             return _result(False, error=msg)
 
+        root.signatures[signature.keyid] = signature
+
         # If it isn't a "bootstrap" signing event, it must be "update metadata"
         bootstrap_state = self._settings.get_fresh("BOOTSTRAP")
         if "signing" in bootstrap_state:
+            # Pass inital root as "other" root
             # Signature and threshold of initial root can only self-validate,
             # there is no "trusted root" at bootstrap time yet.
-            if not self._validate_signature(root, signature):
+            result = root.signed.get_root_verification_result(
+                root.signed, root.signed_bytes, root.signatures
+            )
+
+            if signature.keyid not in result.signed:
                 return _result(False, error="Invalid signature")
 
-            root.signatures[signature.keyid] = signature
-            if not self._validate_threshold(root):
+            if not result.verified:
                 self.write_repository_settings("ROOT_SIGNING", root.to_dict())
                 msg = f"Root v{root.signed.version} is pending signatures"
                 return _result(True, bootstrap=msg)
@@ -1413,18 +1364,14 @@ class MetadataRepository:
             # - threshold must validate with the threshold of keys as defined
             #   in the trusted root AND as defined in the new root
             trusted_root = self._storage_backend.get("root")
-            is_valid_trusted = self._validate_signature(
-                root, signature, trusted_root
+            result = root.signed.get_root_verification_result(
+                trusted_root, root.signed_bytes, root.signatures
             )
-            is_valid_new = self._validate_signature(root, signature)
 
-            if not (is_valid_trusted or is_valid_new):
+            if signature.keyid not in result.signed:
                 return _result(False, error="Invalid signature")
 
-            root.signatures[signature.keyid] = signature
-            trusted_threshold = self._validate_threshold(root, trusted_root)
-            new_threshold = self._validate_threshold(root)
-            if not (trusted_threshold and new_threshold):
+            if not result.verified:
                 self.write_repository_settings("ROOT_SIGNING", root.to_dict())
                 msg = f"Root v{root.signed.version} is pending signatures"
                 return _result(True, update=msg)
