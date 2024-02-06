@@ -2,13 +2,14 @@
 #
 # SPDX-License-Identifier: MIT
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from dynaconf import Dynaconf
 from pretend import stub
-from securesystemslib.signer import CryptoSigner, Key
+from securesystemslib.signer import AWSSigner, CryptoSigner, Key
 
 from repository_service_tuf_worker.interfaces import IKeyVault
 from repository_service_tuf_worker.signer import (
@@ -131,3 +132,23 @@ class TestSigner:
 
         with patch.dict("os.environ", {}, clear=True), pytest.raises(KeyError):
             store.get(fake_key)
+
+
+    @pytest.mark.skipif(
+        not os.environ.get("AWS_ENDPOINT_URL"), reason="No AWS endpoint"
+    )
+    def test_get_from_aws(self):
+        # Import test public key of given key type and keyid alias from AWS KMS
+        # - see tests/files/aws/init-kms.sh for how such a key is created
+        # - see tox.ini for how credentials etc. are passed via env vars
+        scheme = "rsassa-pss-sha256"
+        aws_keyid = "alias/aws-test-key"
+        uri, key = AWSSigner.import_(aws_keyid, scheme)
+
+        key.unrecognized_fields[RSTUF_ONLINE_KEY_URI_FIELD] = uri
+
+        # Load signer from AWS KMS
+        fake_settings = stub()
+        store = SignerStore(fake_settings)
+        signer = store.get(key)
+        assert isinstance(signer, AWSSigner)
