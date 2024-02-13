@@ -16,6 +16,7 @@ from repository_service_tuf_worker.signer import (
     RSTUF_ONLINE_KEY_URI_FIELD,
     FileNameSigner,
     SignerStore,
+    isolated_env,
 )
 
 _FILES = Path(__file__).parent.parent.parent / "files"
@@ -133,9 +134,8 @@ class TestSigner:
         with patch.dict("os.environ", {}, clear=True), pytest.raises(KeyError):
             store.get(fake_key)
 
-
     @pytest.mark.skipif(
-        not os.environ.get("AWS_ENDPOINT_URL"), reason="No AWS endpoint"
+        not os.environ.get("RSTUF_AWS_ENDPOINT_URL"), reason="No AWS endpoint"
     )
     def test_get_from_aws(self):
         # Import test public key of given key type and keyid alias from AWS KMS
@@ -143,12 +143,14 @@ class TestSigner:
         # - see tox.ini for how credentials etc. are passed via env vars
         scheme = "rsassa-pss-sha256"
         aws_keyid = "alias/aws-test-key"
-        uri, key = AWSSigner.import_(aws_keyid, scheme)
+
+        settings = Dynaconf(envvar_prefix="RSTUF")
+        with isolated_env(settings.to_dict()):
+            uri, key = AWSSigner.import_(aws_keyid, scheme)
 
         key.unrecognized_fields[RSTUF_ONLINE_KEY_URI_FIELD] = uri
 
         # Load signer from AWS KMS
-        fake_settings = stub()
-        store = SignerStore(fake_settings)
+        store = SignerStore(settings)
         signer = store.get(key)
         assert isinstance(signer, AWSSigner)

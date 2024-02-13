@@ -103,6 +103,10 @@ class SignerStore:
         if key_dir := settings.get("ONLINE_KEY_DIR"):
             self._ambient_settings[FileNameSigner.DIR_VAR] = key_dir
 
+        for name, val in settings.items():
+            if name.startswith("AWS_"):
+                self._ambient_settings[name] = val
+
         # Cache settings for KEYVAULT fallback
         self._settings = settings
         self._signers: dict[str, Signer] = {}
