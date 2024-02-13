@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -24,20 +25,20 @@ class FileNameSigner(CryptoSigner):
     Provide method to load **unencrypted** PKCS8/PEM private key from file.
 
     File path is constructed by joining base path in envrionment variable
-    ``RSTUF_ONLINE_KEY_DIR`` with file in ``priv_key_uri``.
+    ``ONLINE_KEY_DIR`` with file in ``priv_key_uri``.
 
     NOTE: Make sure to use the secrets management service of your deployment
     platform to protect your private key!
 
     Example::
 
-        RSTUF_ONLINE_KEY_DIR (env) "/run/secrets"
+        ONLINE_KEY_DIR (env) "/run/secrets"
         priv_key_uri (arg): "fn:foo"
 
         File path: "/run/secrets/foo"
 
     Raises:
-        KeyError: RSTUF_ONLINE_KEY_DIR environment variable not set
+        KeyError: ONLINE_KEY_DIR environment variable not set
         OSError: file cannot be loaded
         ValueError: uri has no filenmae, or private key cannot be decoded,
                 or type does not match public key
@@ -46,7 +47,7 @@ class FileNameSigner(CryptoSigner):
     """
 
     SCHEME = "fn"
-    DIR_VAR = "RSTUF_ONLINE_KEY_DIR"
+    DIR_VAR = "ONLINE_KEY_DIR"
 
     @classmethod
     def from_priv_key_uri(
@@ -80,10 +81,29 @@ SIGNER_FOR_URI_SCHEME[CryptoSigner.FILE_URI_SCHEME] = CryptoSigner
 SIGNER_FOR_URI_SCHEME[FileNameSigner.SCHEME] = FileNameSigner
 
 
+@contextmanager
+def isolated_env(env: dict[str, str]):
+    """Temporarily replace `os.environ` with passed env."""
+    orig_env = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(env)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(orig_env)
+
+
 class SignerStore:
     """Generic signer store."""
 
     def __init__(self, settings: Dynaconf):
+        # Cache known ambient settings as expected environment variables
+        self._ambient_settings: dict[str, str] = {}
+        if key_dir := settings.get("ONLINE_KEY_DIR"):
+            self._ambient_settings[FileNameSigner.DIR_VAR] = key_dir
+
+        # Cache settings for KEYVAULT fallback
         self._settings = settings
         self._signers: dict[str, Signer] = {}
 
@@ -98,7 +118,10 @@ class SignerStore:
 
         if key.keyid not in self._signers:
             if uri := key.unrecognized_fields.get(RSTUF_ONLINE_KEY_URI_FIELD):
-                self._signers[key.keyid] = Signer.from_priv_key_uri(uri, key)
+                with isolated_env(self._ambient_settings):
+                    signer = Signer.from_priv_key_uri(uri, key)
+
+                self._signers[key.keyid] = signer
 
             else:
                 vault = self._settings.get("KEYVAULT")
